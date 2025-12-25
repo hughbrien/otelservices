@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: query-config
+  namespace: otel-system
+data:
+  query.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 8081
+      read_timeout: 30s
+      write_timeout: 30s
+      shutdown_timeout: 30s
+    clickhouse:
+      addresses:
+        - "clickhouse:9000"
+      database: "otel"
+      username: "default"
+      password: ""
+      max_open_conns: 50
+      max_idle_conns: 5
+      conn_max_lifetime: 1h
+      dial_timeout: 10s
+      compression: "zstd"
+    otlp:
+      grpc_port: 4317
+      http_port: 4318
+      enable_grpc: false
+      enable_http: false
+      max_recv_msg_size_mb: 4
+    monitoring:
+      metrics_port: 9091
+      metrics_path: "/metrics"
+      log_level: "info"
+      log_format: "json"
+      health_check_path: "/health"
+      ready_check_path: "/ready"
+      trace_sample_rate: 0.1
+    performance:
+      batch_size: 1000
+      batch_timeout: 5s
+      max_batch_bytes: 10485760
+      worker_count: 4
+      queue_size: 10000
+      memory_limit_mib: 2048
+      memory_spike_limit: 512
+      retry_max_attempts: 3
+      retry_initial_interval: 1s
+      retry_max_interval: 10s
+      cache_ttl: 15m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-query
+  namespace: otel-system
+  labels:
+    app: otel-query
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: api
+    - port: 9091
+      targetPort: 9091
+      protocol: TCP
+      name: metrics
+  selector:
+    app: otel-query
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-query
+  namespace: otel-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: otel-query
+  template:
+    metadata:
+      labels:
+        app: otel-query
+    spec:
+      containers:
+        - name: query
+          image: otel-query:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: api
+            - containerPort: 9091
+              name: metrics
+          env:
+            - name: CONFIG_PATH
+              value: "/app/configs/query.yaml"
+            - name: LOG_LEVEL
+              value: "info"
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: query-config

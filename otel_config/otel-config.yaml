@@ -1,0 +1,94 @@
+## Otel Configuration for AppDynamics Java Agent
+## Traces only for now
+
+extensions:
+  health_check:
+    check_collector_pipeline:
+      enabled: true
+      interval: "15s"
+      exporter_failure_threshold: 5
+  pprof:
+    endpoint: localhost:1777
+  zpages:
+    endpoint: localhost:55679
+
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      load: { }
+      memory: { }
+      filesystem: { }
+      network: { }
+      paging: { }
+      # cpu/disk omitted on macOS
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "node_exporter"
+          static_configs:
+            - targets: [ "localhost:9100" ]   # where node_exporter runs
+  otlp:
+    protocols:
+      grpc:
+      http:
+
+  filelog:
+    # 1. DISCOVER all .log files in /var/log/myapp/
+    include: [ /Users/hughbrien/GolandProjects/ExtraChat/logs/chatbot.log ]
+    # 2. READ from the beginning of new files
+    start_at: end
+      # 3. PARSE using the json_parser operator
+      #operators:
+      #  - type: json_parser
+      # Tell the parser where to find the timestamp and how it's formatted
+      #    timestamp:
+      #      parse_from: attributes.time
+      #      layout: "%Y-%m-%d %H:%M:%S"
+    # Tell the parser which field contains the severity
+    #    severity:
+    #      parse_from: attributes.level
+
+processors:
+  resource:
+    attributes:
+      - key: steelstratus.owner
+        action: upsert
+        value: "hugh.brien"
+      - key: hostname
+        action: upsert
+        value: "steelstratus.com"
+      - key: steelstratus.port
+        action: upsert
+        value: 443
+  batch:
+    timeout: 5s
+    send_batch_size: 5
+
+exporters:
+  debug :
+    verbosity : detailed
+  file/logs:
+    path: ./logs/extrachat.logs
+  file/metrics:
+    path: ./logs/extrachat_metrics.logs
+  file/traces:
+    path: ./logs/extrachat_traces.logs
+
+
+service:
+  extensions : [ health_check, pprof, zpages ]
+  pipelines:
+    metrics:
+      # receivers: [ prometheus ]
+      receivers: [ otlp ]
+      exporters: [ file/metrics]
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [ file/traces]
+    logs:
+      receivers: [ otlp, filelog ]
+      processors: [ resource, batch ]
+      exporters: [  file/logs ]
+

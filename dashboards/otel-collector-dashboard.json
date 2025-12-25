@@ -1,0 +1,108 @@
+{
+  "dashboard": {
+    "title": "OpenTelemetry Collector Dashboard",
+    "tags": ["otel", "collector", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Spans Received Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(otel_received_spans_total[5m])",
+            "legendFormat": "{{service}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "title": "Metrics Received Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(otel_received_metrics_total[5m])",
+            "legendFormat": "{{service}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "title": "Logs Received Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(otel_received_logs_total[5m])",
+            "legendFormat": "{{service}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "title": "Storage Write Success Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(otel_storage_writes_total{status=\"success\"}[5m])",
+            "legendFormat": "{{table}} - success"
+          },
+          {
+            "expr": "rate(otel_storage_writes_total{status=\"error\"}[5m])",
+            "legendFormat": "{{table}} - error"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "title": "Storage Write Duration (p95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(otel_storage_write_duration_seconds_bucket[5m]))",
+            "legendFormat": "{{table}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "title": "Batch Size Distribution",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(otel_batch_size_bucket[5m]))",
+            "legendFormat": "{{signal_type}} - p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(otel_batch_size_bucket[5m]))",
+            "legendFormat": "{{signal_type}} - p95"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "otel_memory_usage_bytes",
+            "legendFormat": "Memory Usage"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+      },
+      {
+        "title": "Queue Size",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "otel_queue_size",
+            "legendFormat": "{{signal_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+      }
+    ],
+    "refresh": "10s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

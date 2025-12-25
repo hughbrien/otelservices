@@ -1,0 +1,152 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build artifacts
+/otel-collector
+/otel-query
+/otel-storage
+*.test
+*.out
+/bin/
+/build/
+/dist/
+/.idea
+
+# Go coverage and test files
+*.coverprofile
+coverage.out
+coverage.html
+*.cover
+*.coverage
+
+# Vendor directory
+/vendor/
+
+# Go workspace file
+go.work
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# GoLand
+.idea/
+*.iml
+.idea_modules/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Linux
+*~
+.nfs*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Docker volumes and data
+/data/
+/volumes/
+clickhouse-data/
+clickhouse-logs/
+prometheus-data/
+grafana-data/
+
+# Logs
+*.log
+logs/
+/tmp/
+
+# Config files with sensitive data (keep templates)
+configs/*local*.yaml
+configs/*secret*.yaml
+configs/*.secret
+*credentials*
+*password*
+
+# Temporary files
+*.tmp
+*.temp
+/temp/
+
+# Generated documentation
+/docs/_build/
+/site/
+
+# Air live reload
+tmp/
+
+# Debugging
+debug
+__debug_bin
+
+# Benchmarking
+*.bench
+benchmarks/results/
+
+# Database dumps
+*.sql.gz
+*.db
+*.sqlite
+*.sqlite3
+
+# Compiled Object files
+*.o
+*.a
+
+# Profiling
+*.prof
+cpu.prof
+mem.prof
+*.pprof
+
+# Archives
+*.tar
+*.tar.gz
+*.zip
+*.rar
+
+# Dependencies
+go.sum.bak

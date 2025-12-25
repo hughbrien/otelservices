@@ -1,0 +1,78 @@
+{
+  "dashboard": {
+    "title": "ClickHouse Storage Dashboard",
+    "tags": ["clickhouse", "storage", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Ingestion Rate (spans/sec)",
+        "type": "graph",
+        "datasource": "ClickHouse",
+        "targets": [
+          {
+            "query": "SELECT toStartOfMinute(timestamp) AS time, count() / 60 AS rate FROM otel_traces WHERE timestamp > now() - INTERVAL 1 HOUR GROUP BY time ORDER BY time"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "title": "Storage Size by Table",
+        "type": "stat",
+        "datasource": "ClickHouse",
+        "targets": [
+          {
+            "query": "SELECT table, formatReadableSize(sum(bytes)) AS size FROM system.parts WHERE database = 'otel' AND active GROUP BY table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "title": "Compression Ratio",
+        "type": "stat",
+        "datasource": "ClickHouse",
+        "targets": [
+          {
+            "query": "SELECT table, round(sum(data_uncompressed_bytes) / sum(data_compressed_bytes), 2) AS ratio FROM system.parts WHERE database = 'otel' AND active GROUP BY table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "title": "Row Count by Table",
+        "type": "stat",
+        "datasource": "ClickHouse",
+        "targets": [
+          {
+            "query": "SELECT table, formatReadableQuantity(sum(rows)) AS rows FROM system.parts WHERE database = 'otel' AND active GROUP BY table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "title": "Top Services by Span Count",
+        "type": "table",
+        "datasource": "ClickHouse",
+        "targets": [
+          {
+            "query": "SELECT service_name, count() AS span_count FROM otel_traces WHERE timestamp > now() - INTERVAL 1 HOUR GROUP BY service_name ORDER BY span_count DESC LIMIT 10"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "title": "Error Rate by Service",
+        "type": "graph",
+        "datasource": "ClickHouse",
+        "targets": [
+          {
+            "query": "SELECT toStartOfMinute(timestamp) AS time, service_name, countIf(status_code = 'error') / count() * 100 AS error_rate FROM otel_traces WHERE timestamp > now() - INTERVAL 1 HOUR GROUP BY time, service_name ORDER BY time"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

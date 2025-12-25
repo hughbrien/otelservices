@@ -1,0 +1,47 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 30s
+
+clickhouse:
+  addresses:
+    - "localhost:9000"
+  database: "otel"
+  username: "default"
+  password: ""
+  max_open_conns: 50
+  max_idle_conns: 5
+  conn_max_lifetime: 1h
+  dial_timeout: 10s
+  compression: "zstd"
+
+otlp:
+  grpc_port: 4317
+  http_port: 4318
+  enable_grpc: true
+  enable_http: true
+  max_recv_msg_size_mb: 4
+
+monitoring:
+  metrics_port: 9090
+  metrics_path: "/metrics"
+  log_level: "info"
+  log_format: "json"
+  health_check_path: "/health"
+  ready_check_path: "/ready"
+  trace_sample_rate: 0.1
+
+performance:
+  batch_size: 10000
+  batch_timeout: 10s
+  max_batch_bytes: 104857600  # 100MB
+  worker_count: 4
+  queue_size: 100000
+  memory_limit_mib: 3200
+  memory_spike_limit: 800
+  retry_max_attempts: 5
+  retry_initial_interval: 1s
+  retry_max_interval: 30s
+  cache_ttl: 15m

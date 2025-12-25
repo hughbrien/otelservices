@@ -1,0 +1,466 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"otelservices/internal/clickhouse"
+	"otelservices/internal/config"
+	"otelservices/internal/models"
+	"otelservices/internal/monitoring"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+)
+
+const (
+	serviceName    = "otel-collector"
+	serviceVersion = "1.0.0"
+)
+
+// Collector is the main OTLP collector service
+type Collector struct {
+	coltracepb.UnimplementedTraceServiceServer
+	colmetricspb.UnimplementedMetricsServiceServer
+	collogspb.UnimplementedLogsServiceServer
+
+	config      *config.Config
+	chClient    *clickhouse.Client
+	healthCheck *monitoring.HealthCheck
+
+	// Buffered channels for batching
+	spanChan   chan models.Span
+	metricChan chan models.Metric
+	logChan    chan models.LogRecord
+
+	wg sync.WaitGroup
+}
+
+// NewCollector creates a new collector instance
+func NewCollector(cfg *config.Config, chClient *clickhouse.Client) *Collector {
+	return &Collector{
+		config:      cfg,
+		chClient:    chClient,
+		healthCheck: monitoring.NewHealthCheck(),
+		spanChan:    make(chan models.Span, cfg.Performance.QueueSize),
+		metricChan:  make(chan models.Metric, cfg.Performance.QueueSize),
+		logChan:     make(chan models.LogRecord, cfg.Performance.QueueSize),
+	}
+}
+
+// Export implements the OTLP trace service (TraceServiceServer)
+func (c *Collector) Export(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
+	td := ptrace.NewTraces()
+	if err := td.UnmarshalProto((*tracepb.TracesData)(req)); err != nil {
+		return nil, err
+	}
+
+	resourceSpans := td.ResourceSpans()
+	for i := 0; i < resourceSpans.Len(); i++ {
+		rs := resourceSpans.At(i)
+		resource := rs.Resource()
+		scopeSpans := rs.ScopeSpans()
+
+		for j := 0; j < scopeSpans.Len(); j++ {
+			ss := scopeSpans.At(j)
+			scope := ss.Scope()
+			spans := ss.Spans()
+
+			for k := 0; k < spans.Len(); k++ {
+				span := spans.At(k)
+
+				// Extract resource attributes
+				serviceName := extractAttribute(resource.Attributes(), "service.name")
+				serviceNamespace := extractAttribute(resource.Attributes(), "service.namespace")
+				serviceInstanceID := extractAttribute(resource.Attributes(), "service.instance.id")
+				deploymentEnv := extractAttribute(resource.Attributes(), "deployment.environment")
+
+				// Convert to internal model
+				modelSpan := models.Span{
+					Timestamp:                   time.Unix(0, int64(span.StartTimestamp())),
+					TraceID:                     span.TraceID().String(),
+					SpanID:                      span.SpanID().String(),
+					ParentSpanID:                span.ParentSpanID().String(),
+					SpanName:                    span.Name(),
+					SpanKind:                    span.Kind().String(),
+					StartTime:                   time.Unix(0, int64(span.StartTimestamp())),
+					EndTime:                     time.Unix(0, int64(span.EndTimestamp())),
+					DurationNs:                  uint64(span.EndTimestamp() - span.StartTimestamp()),
+					StatusCode:                  span.Status().Code().String(),
+					StatusMessage:               span.Status().Message(),
+					ServiceName:                 serviceName,
+					ServiceNamespace:            serviceNamespace,
+					ServiceInstanceID:           serviceInstanceID,
+					DeploymentEnvironment:       deploymentEnv,
+					Attributes:                  attributesToMap(span.Attributes()),
+					ResourceAttributes:          attributesToMap(resource.Attributes()),
+					InstrumentationScopeName:    scope.Name(),
+					InstrumentationScopeVersion: scope.Version(),
+				}
+
+				// Send to channel (non-blocking with timeout)
+				select {
+				case c.spanChan <- modelSpan:
+					monitoring.ReceivedSpans.WithLabelValues(serviceName).Inc()
+				case <-time.After(100 * time.Millisecond):
+					log.Printf("Warning: span channel full, dropping span")
+				}
+			}
+		}
+	}
+
+	return &coltracepb.ExportTraceServiceResponse{}, nil
+}
+
+// ExportMetrics implements the OTLP metrics service (MetricsServiceServer)
+func (c *Collector) ExportMetrics(ctx context.Context, req *colmetricspb.ExportMetricsServiceRequest) (*colmetricspb.ExportMetricsServiceResponse, error) {
+	md := pmetric.NewMetrics()
+	if err := md.UnmarshalProto((*metricspb.MetricsData)(req)); err != nil {
+		return nil, err
+	}
+
+	resourceMetrics := md.ResourceMetrics()
+	for i := 0; i < resourceMetrics.Len(); i++ {
+		rm := resourceMetrics.At(i)
+		resource := rm.Resource()
+		scopeMetrics := rm.ScopeMetrics()
+
+		serviceName := extractAttribute(resource.Attributes(), "service.name")
+
+		for j := 0; j < scopeMetrics.Len(); j++ {
+			sm := scopeMetrics.At(j)
+			metrics := sm.Metrics()
+
+			for k := 0; k < metrics.Len(); k++ {
+				metric := metrics.At(k)
+
+				// Process different metric types
+				// Note: Simplified - would need full implementation for all metric types
+				monitoring.ReceivedMetrics.WithLabelValues(serviceName).Inc()
+			}
+		}
+	}
+
+	return &colmetricspb.ExportMetricsServiceResponse{}, nil
+}
+
+// ExportLogs implements the OTLP logs service (LogsServiceServer)
+func (c *Collector) ExportLogs(ctx context.Context, req *collogspb.ExportLogsServiceRequest) (*collogspb.ExportLogsServiceResponse, error) {
+	ld := plog.NewLogs()
+	if err := ld.UnmarshalProto((*logspb.LogsData)(req)); err != nil {
+		return nil, err
+	}
+
+	resourceLogs := ld.ResourceLogs()
+	for i := 0; i < resourceLogs.Len(); i++ {
+		rl := resourceLogs.At(i)
+		resource := rl.Resource()
+		scopeLogs := rl.ScopeLogs()
+
+		serviceName := extractAttribute(resource.Attributes(), "service.name")
+		serviceNamespace := extractAttribute(resource.Attributes(), "service.namespace")
+		serviceInstanceID := extractAttribute(resource.Attributes(), "service.instance.id")
+		deploymentEnv := extractAttribute(resource.Attributes(), "deployment.environment")
+		hostName := extractAttribute(resource.Attributes(), "host.name")
+
+		for j := 0; j < scopeLogs.Len(); j++ {
+			sl := scopeLogs.At(j)
+			scope := sl.Scope()
+			logRecords := sl.LogRecords()
+
+			for k := 0; k < logRecords.Len(); k++ {
+				logRecord := logRecords.At(k)
+
+				modelLog := models.LogRecord{
+					Timestamp:                   time.Unix(0, int64(logRecord.Timestamp())),
+					ObservedTimestamp:           time.Unix(0, int64(logRecord.ObservedTimestamp())),
+					SeverityNumber:              uint8(logRecord.SeverityNumber()),
+					SeverityText:                logRecord.SeverityText(),
+					Body:                        logRecord.Body().AsString(),
+					BodyType:                    "string",
+					ServiceName:                 serviceName,
+					ServiceNamespace:            serviceNamespace,
+					ServiceInstanceID:           serviceInstanceID,
+					DeploymentEnvironment:       deploymentEnv,
+					HostName:                    hostName,
+					TraceID:                     logRecord.TraceID().String(),
+					SpanID:                      logRecord.SpanID().String(),
+					TraceFlags:                  uint8(logRecord.Flags()),
+					Attributes:                  attributesToMap(logRecord.Attributes()),
+					ResourceAttributes:          attributesToMap(resource.Attributes()),
+					InstrumentationScopeName:    scope.Name(),
+					InstrumentationScopeVersion: scope.Version(),
+				}
+
+				select {
+				case c.logChan <- modelLog:
+					monitoring.ReceivedLogs.WithLabelValues(serviceName).Inc()
+				case <-time.After(100 * time.Millisecond):
+					log.Printf("Warning: log channel full, dropping log")
+				}
+			}
+		}
+	}
+
+	return &collogspb.ExportLogsServiceResponse{}, nil
+}
+
+// startBatchProcessor starts background workers to batch and write data
+func (c *Collector) startBatchProcessor(ctx context.Context) {
+	for i := 0; i < c.config.Performance.WorkerCount; i++ {
+		c.wg.Add(3)
+		go c.processSpans(ctx)
+		go c.processMetrics(ctx)
+		go c.processLogs(ctx)
+	}
+}
+
+// processSpans batches and writes spans to ClickHouse
+func (c *Collector) processSpans(ctx context.Context) {
+	defer c.wg.Done()
+
+	batch := make([]models.Span, 0, c.config.Performance.BatchSize)
+	ticker := time.NewTicker(c.config.Performance.BatchTimeout)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		start := time.Now()
+		if err := c.chClient.InsertSpans(ctx, batch); err != nil {
+			log.Printf("Error inserting spans: %v", err)
+			monitoring.StorageWrites.WithLabelValues("otel_traces", "error").Add(float64(len(batch)))
+		} else {
+			monitoring.StorageWrites.WithLabelValues("otel_traces", "success").Add(float64(len(batch)))
+		}
+		monitoring.StorageWriteDuration.WithLabelValues("otel_traces").Observe(time.Since(start).Seconds())
+		monitoring.BatchSize.WithLabelValues("traces").Observe(float64(len(batch)))
+
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		case span := <-c.spanChan:
+			batch = append(batch, span)
+			if len(batch) >= c.config.Performance.BatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// processMetrics batches and writes metrics to ClickHouse
+func (c *Collector) processMetrics(ctx context.Context) {
+	defer c.wg.Done()
+
+	batch := make([]models.Metric, 0, c.config.Performance.BatchSize)
+	ticker := time.NewTicker(c.config.Performance.BatchTimeout)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		start := time.Now()
+		if err := c.chClient.InsertMetrics(ctx, batch); err != nil {
+			log.Printf("Error inserting metrics: %v", err)
+			monitoring.StorageWrites.WithLabelValues("otel_metrics", "error").Add(float64(len(batch)))
+		} else {
+			monitoring.StorageWrites.WithLabelValues("otel_metrics", "success").Add(float64(len(batch)))
+		}
+		monitoring.StorageWriteDuration.WithLabelValues("otel_metrics").Observe(time.Since(start).Seconds())
+		monitoring.BatchSize.WithLabelValues("metrics").Observe(float64(len(batch)))
+
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		case metric := <-c.metricChan:
+			batch = append(batch, metric)
+			if len(batch) >= c.config.Performance.BatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// processLogs batches and writes logs to ClickHouse
+func (c *Collector) processLogs(ctx context.Context) {
+	defer c.wg.Done()
+
+	batch := make([]models.LogRecord, 0, c.config.Performance.BatchSize)
+	ticker := time.NewTicker(c.config.Performance.BatchTimeout)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		start := time.Now()
+		if err := c.chClient.InsertLogs(ctx, batch); err != nil {
+			log.Printf("Error inserting logs: %v", err)
+			monitoring.StorageWrites.WithLabelValues("otel_logs", "error").Add(float64(len(batch)))
+		} else {
+			monitoring.StorageWrites.WithLabelValues("otel_logs", "success").Add(float64(len(batch)))
+		}
+		monitoring.StorageWriteDuration.WithLabelValues("otel_logs").Observe(time.Since(start).Seconds())
+		monitoring.BatchSize.WithLabelValues("logs").Observe(float64(len(batch)))
+
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		case logRecord := <-c.logChan:
+			batch = append(batch, logRecord)
+			if len(batch) >= c.config.Performance.BatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// Helper functions
+func extractAttribute(attrs pcommon.Map, key string) string {
+	if val, ok := attrs.Get(key); ok {
+		return val.AsString()
+	}
+	return ""
+}
+
+func attributesToMap(attrs pcommon.Map) map[string]string {
+	result := make(map[string]string)
+	attrs.Range(func(k string, v pcommon.Value) bool {
+		result[k] = v.AsString()
+		return true
+	})
+	return result
+}
+
+func main() {
+	// Load configuration
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "configs/collector.yaml"
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Initialize monitoring
+	shutdown, err := monitoring.InitTracing(serviceName, serviceVersion, cfg.Monitoring.TraceSampleRate)
+	if err != nil {
+		log.Fatalf("Failed to initialize tracing: %v", err)
+	}
+	defer shutdown(context.Background())
+
+	// Start metrics server
+	metricsServer := monitoring.StartMetricsServer(cfg.Monitoring.MetricsPort, cfg.Monitoring.MetricsPath)
+	defer metricsServer.Shutdown(context.Background())
+
+	// Connect to ClickHouse
+	chClient, err := clickhouse.NewClient(&cfg.ClickHouse)
+	if err != nil {
+		log.Fatalf("Failed to connect to ClickHouse: %v", err)
+	}
+	defer chClient.Close()
+
+	// Create collector
+	collector := NewCollector(cfg, chClient)
+
+	// Start batch processors
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	collector.startBatchProcessor(ctx)
+
+	// Start gRPC server
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.OTLP.GRPCPort))
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	coltracepb.RegisterTraceServiceServer(grpcServer, collector)
+	colmetricspb.RegisterMetricsServiceServer(grpcServer, collector)
+	collogspb.RegisterLogsServiceServer(grpcServer, collector)
+	reflection.Register(grpcServer)
+
+	// Start health check server
+	healthMux := http.NewServeMux()
+	healthMux.HandleFunc(cfg.Monitoring.HealthCheckPath, collector.healthCheck.LivenessHandler)
+	healthMux.HandleFunc(cfg.Monitoring.ReadyCheckPath, collector.healthCheck.ReadinessHandler)
+	healthServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: healthMux,
+	}
+
+	go func() {
+		if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Health server error: %v", err)
+		}
+	}()
+
+	collector.healthCheck.SetReady(true)
+	log.Printf("OTLP Collector started on port %d", cfg.OTLP.GRPCPort)
+
+	// Start gRPC server
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("Failed to serve: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	log.Println("Shutting down gracefully...")
+	collector.healthCheck.SetReady(false)
+	cancel()
+	grpcServer.GracefulStop()
+	collector.wg.Wait()
+	log.Println("Shutdown complete")
+}

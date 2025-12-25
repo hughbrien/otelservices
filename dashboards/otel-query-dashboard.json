@@ -1,0 +1,64 @@
+{
+  "dashboard": {
+    "title": "OpenTelemetry Query API Dashboard",
+    "tags": ["otel", "query", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Query Rate by Type",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(otel_query_duration_seconds_count[5m])",
+            "legendFormat": "{{query_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "title": "Query Duration (p50, p95, p99)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(otel_query_duration_seconds_bucket[5m]))",
+            "legendFormat": "{{query_type}} - p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(otel_query_duration_seconds_bucket[5m]))",
+            "legendFormat": "{{query_type}} - p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(otel_query_duration_seconds_bucket[5m]))",
+            "legendFormat": "{{query_type}} - p99"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "title": "Query Errors Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(otel_query_errors_total[5m])",
+            "legendFormat": "{{query_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "title": "Query Success Rate (%)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "(rate(otel_query_duration_seconds_count[5m]) - rate(otel_query_errors_total[5m])) / rate(otel_query_duration_seconds_count[5m]) * 100",
+            "legendFormat": "{{query_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      }
+    ],
+    "refresh": "10s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}
