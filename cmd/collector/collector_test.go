@@ -224,6 +224,9 @@ func TestCollectorChannelSizes(t *testing.T) {
 
 func BenchmarkTraceExport(b *testing.B) {
 	cfg := config.DefaultConfig()
+	// Use larger queue for benchmarks to prevent channel overflow
+	cfg.Performance.QueueSize = 1000000
+
 	chClient, err := clickhouse.NewClient(&cfg.ClickHouse)
 	if err != nil {
 		b.Skip("ClickHouse not available for benchmark")
@@ -265,8 +268,30 @@ func BenchmarkTraceExport(b *testing.B) {
 		},
 	}
 
+	// Start a goroutine to drain the channel to prevent overflow
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-collector.trace.spanChan:
+				// Drain spans
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		collector.trace.Export(ctx, req)
+	}
+	b.StopTimer()
+
+	// Signal drainer to stop
+	close(done)
+
+	// Drain remaining
+	for len(collector.trace.spanChan) > 0 {
+		<-collector.trace.spanChan
 	}
 }

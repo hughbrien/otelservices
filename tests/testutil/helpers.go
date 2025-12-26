@@ -14,7 +14,9 @@ import (
 // CreateTestConfig returns a configuration suitable for testing
 func CreateTestConfig() *config.Config {
 	cfg := config.DefaultConfig()
-	cfg.ClickHouse.Database = "otel_test"
+	// Use 127.0.0.1 instead of localhost to force IPv4
+	cfg.ClickHouse.Addresses = []string{"127.0.0.1:9000"}
+	cfg.ClickHouse.Database = "otel"
 	cfg.Performance.BatchSize = 100
 	cfg.Performance.WorkerCount = 2
 	cfg.Performance.QueueSize = 1000
@@ -23,7 +25,8 @@ func CreateTestConfig() *config.Config {
 
 // CreateTestClickHouseClient creates a ClickHouse client for testing
 // Skips the test if ClickHouse is not available
-func CreateTestClickHouseClient(t *testing.T) *clickhouse.Client {
+// Accepts both *testing.T and *testing.B through the testing.TB interface
+func CreateTestClickHouseClient(t testing.TB) *clickhouse.Client {
 	t.Helper()
 
 	cfg := CreateTestConfig()
@@ -132,7 +135,7 @@ func CreateTestSpanWithError(serviceName string, spanName string, errorMsg strin
 }
 
 // WaitForCondition waits for a condition to be true with timeout
-func WaitForCondition(t *testing.T, condition func() bool, timeout time.Duration, message string) {
+func WaitForCondition(t testing.TB, condition func() bool, timeout time.Duration, message string) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -153,7 +156,7 @@ func WaitForCondition(t *testing.T, condition func() bool, timeout time.Duration
 }
 
 // CleanupTestData cleans up test data from ClickHouse
-func CleanupTestData(t *testing.T, client *clickhouse.Client) {
+func CleanupTestData(t testing.TB, client *clickhouse.Client) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -183,7 +186,7 @@ func generateSpanID() string {
 }
 
 // AssertMetricsEqual checks if two metrics are equal
-func AssertMetricsEqual(t *testing.T, expected, actual models.Metric) {
+func AssertMetricsEqual(t testing.TB, expected, actual models.Metric) {
 	t.Helper()
 
 	if expected.MetricName != actual.MetricName {
@@ -198,7 +201,7 @@ func AssertMetricsEqual(t *testing.T, expected, actual models.Metric) {
 }
 
 // AssertLogsEqual checks if two log records are equal
-func AssertLogsEqual(t *testing.T, expected, actual models.LogRecord) {
+func AssertLogsEqual(t testing.TB, expected, actual models.LogRecord) {
 	t.Helper()
 
 	if expected.Body != actual.Body {
@@ -213,7 +216,7 @@ func AssertLogsEqual(t *testing.T, expected, actual models.LogRecord) {
 }
 
 // AssertSpansEqual checks if two spans are equal
-func AssertSpansEqual(t *testing.T, expected, actual models.Span) {
+func AssertSpansEqual(t testing.TB, expected, actual models.Span) {
 	t.Helper()
 
 	if expected.SpanName != actual.SpanName {

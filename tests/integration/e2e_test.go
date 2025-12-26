@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"otelservices/cmd/query"
 	"otelservices/internal/models"
 	"otelservices/tests/testutil"
 
@@ -22,6 +21,24 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// TraceQueryRequest matches the request structure in cmd/query
+type TraceQueryRequest struct {
+	TraceID     string    `json:"trace_id,omitempty"`
+	ServiceName string    `json:"service_name,omitempty"`
+	SpanName    string    `json:"span_name,omitempty"`
+	StartTime   time.Time `json:"start_time"`
+	EndTime     time.Time `json:"end_time"`
+	MinDuration uint64    `json:"min_duration,omitempty"`
+	MaxDuration uint64    `json:"max_duration,omitempty"`
+	Limit       int       `json:"limit,omitempty"`
+}
+
+// TraceQueryResponse matches the response structure in cmd/query
+type TraceQueryResponse struct {
+	Spans []models.Span `json:"spans"`
+	Total int           `json:"total"`
+}
 
 // TestEndToEndTraceIngestionAndQuery tests the full pipeline:
 // OTLP ingestion -> ClickHouse storage -> Query API
@@ -91,7 +108,7 @@ func TestEndToEndTraceIngestionAndQuery(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	// Query traces via API
-	queryReq := main.TraceQueryRequest{
+	queryReq := TraceQueryRequest{
 		ServiceName: "e2e-test-service",
 		StartTime:   time.Now().Add(-5 * time.Minute),
 		EndTime:     time.Now(),
@@ -109,7 +126,7 @@ func TestEndToEndTraceIngestionAndQuery(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	var queryResp main.TraceQueryResponse
+	var queryResp TraceQueryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&queryResp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}

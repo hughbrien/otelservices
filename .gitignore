@@ -15,7 +15,7 @@
 /build/
 /dist/
 /.idea
-
+/bin
 # Go coverage and test files
 *.coverprofile
 coverage.out

@@ -60,7 +60,8 @@ build-query:
 
 build-loadtest:
 	@echo "Building load test tool..."
-	go build -o bin/load_test ./benchmarks
+	@mkdir -p bin
+	cd benchmarks && go build -o ../bin/load_test .
 
 # Running
 run-collector:

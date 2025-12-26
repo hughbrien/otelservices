@@ -1,93 +1,51 @@
 # OpenTelemetry Services
 
-A high-performance OpenTelemetry data pipeline built in Go that collects, processes, and stores metrics, logs, and traces with 1-year retention optimization.
+High-performance OpenTelemetry data pipeline for collecting, storing, and querying metrics, logs, and traces with long-term retention.
 
 ## Features
 
-- **High Performance:** 100,000+ spans/sec per collector instance
-- **Optimized Storage:** ClickHouse with ZSTD compression (~10:1 ratio)
-- **Long-Term Retention:** Automatic rollups for 1-year data retention
-- **Query Performance:** p95 < 500ms for 24-hour queries
-- **Compatible APIs:** Jaeger, Prometheus, and Loki compatible query interfaces
-- **Production Ready:** Docker Compose for dev, Kubernetes manifests for production
-- **Comprehensive Monitoring:** Prometheus metrics and Grafana dashboards
+- 100K+ spans/sec ingestion per instance
+- ClickHouse storage with ~10:1 compression
+- 1-year retention with automatic rollups
+- Jaeger, Prometheus, and Loki compatible APIs
+- Docker Compose and Kubernetes ready
 
 ## Architecture
 
 ```
-Applications → OTLP Collector → ClickHouse → Query API → Visualization
-                (4317/4318)     (Optimized    (REST API)   (Grafana)
-                                 Storage)
+Apps → Collector (4317/4318) → ClickHouse → Query API (8081) → Grafana (3000)
 ```
-
-### Components
-
-1. **OTLP Collector Service**
-   - Receives OTLP gRPC and HTTP traffic
-   - Batching, retry logic, and backpressure handling
-   - Writes to ClickHouse with optimal compression
-
-2. **ClickHouse Storage**
-   - Column-oriented database with ~10:1 compression
-   - Automatic data rollups (5m, 1h aggregations)
-   - TTL-based retention policies (30d raw, 1y rollups)
-
-3. **Query API Service**
-   - Prometheus-compatible metrics queries
-   - Loki-compatible log queries
-   - Jaeger-compatible trace queries
-   - Service statistics endpoints
 
 ## Quick Start
 
-### Local Development with Docker Compose
+### Deploy with Docker Compose
 
 ```bash
-# Start all services
 cd deployments/docker
 docker-compose up -d
 
-# Initialize ClickHouse schema
-docker exec -it otel-clickhouse clickhouse-client --multiquery < ../../schema/001_create_otel_metrics.sql
-docker exec -it otel-clickhouse clickhouse-client --multiquery < ../../schema/002_create_otel_logs.sql
-docker exec -it otel-clickhouse clickhouse-client --multiquery < ../../schema/003_create_otel_traces.sql
+# Initialize schema
+docker exec -i otel-clickhouse clickhouse-client --multiquery < ../../schema/001_create_otel_metrics.sql
+docker exec -i otel-clickhouse clickhouse-client --multiquery < ../../schema/002_create_otel_logs.sql
+docker exec -i otel-clickhouse clickhouse-client --multiquery < ../../schema/003_create_otel_traces.sql
 
-# Verify services are running
+# Verify
 curl http://localhost:8080/health  # Collector
 curl http://localhost:8081/health  # Query API
-
-# Access Grafana at http://localhost:3000 (admin/admin)
 ```
 
-### Production Deployment on Kubernetes
+**Access Points:**
+- Collector: `localhost:4317` (gRPC), `localhost:4318` (HTTP)
+- Query API: `localhost:8081`
+- Grafana: `localhost:3000` (admin/admin)
+- Prometheus: `localhost:9092`
+- ClickHouse: `localhost:9000` (native), `localhost:8123` (HTTP)
 
-```bash
-# Create namespace
-kubectl apply -f deployments/k8s/namespace.yaml
+### Send Data
 
-# Create schema ConfigMap
-kubectl create configmap clickhouse-schema --from-file=schema/ -n otel-system
-
-# Deploy ClickHouse
-kubectl apply -f deployments/k8s/clickhouse-statefulset.yaml
-
-# Deploy Collector
-kubectl apply -f deployments/k8s/collector-deployment.yaml
-
-# Deploy Query Service
-kubectl apply -f deployments/k8s/query-deployment.yaml
-```
-
-## Usage
-
-### Sending Data to the Collector
-
-Configure your application to export OTLP data:
-
+**Using OpenTelemetry SDK (Go):**
 ```go
-import (
-    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-)
+import "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 
 exporter, _ := otlptracegrpc.New(
     context.Background(),
@@ -96,227 +54,160 @@ exporter, _ := otlptracegrpc.New(
 )
 ```
 
-### Querying Data
-
-#### Query Traces
-
+**Using HTTP/JSON:**
 ```bash
-curl -X POST http://localhost:8081/api/v1/traces \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_name": "my-service",
-    "start_time": "2024-01-01T00:00:00Z",
-    "end_time": "2024-01-01T23:59:59Z",
-    "limit": 100
-  }'
+curl -X POST http://localhost:4318/v1/traces -H "Content-Type: application/json" -d '{
+  "resourceSpans": [{
+    "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "my-service"}}]},
+    "scopeSpans": [{"spans": [{
+      "traceId": "5b8aa5a2d2c872e8321cf37308d69df2",
+      "spanId": "051581bf3cb55c13",
+      "name": "my-operation",
+      "startTimeUnixNano": "'$(date +%s)000000000'",
+      "endTimeUnixNano": "'$(date +%s)000000000'"
+    }]}]
+  }]
+}'
 ```
 
-#### Query Metrics
+### Query Data
 
+**Query Traces:**
 ```bash
-curl -X POST http://localhost:8081/api/v1/metrics \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metric_name": "http_request_duration",
-    "service_name": "api-server",
-    "start_time": "2024-01-01T00:00:00Z",
-    "end_time": "2024-01-01T23:59:59Z",
-    "aggregation": "avg"
-  }'
+curl -X POST http://localhost:8081/api/v1/traces -H "Content-Type: application/json" -d '{
+  "service_name": "my-service",
+  "start_time": "2024-01-01T00:00:00Z",
+  "end_time": "2024-01-01T23:59:59Z"
+}'
 ```
 
-#### Query Logs
-
+**Query Metrics:**
 ```bash
-curl -X POST http://localhost:8081/api/v1/logs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_name": "api-server",
-    "start_time": "2024-01-01T00:00:00Z",
-    "end_time": "2024-01-01T23:59:59Z",
-    "severity": "ERROR",
-    "limit": 100
-  }'
+curl -X POST http://localhost:8081/api/v1/metrics -H "Content-Type: application/json" -d '{
+  "metric_name": "http_request_duration",
+  "start_time": "2024-01-01T00:00:00Z",
+  "end_time": "2024-01-01T23:59:59Z",
+  "aggregation": "avg"
+}'
 ```
 
-#### Get Service Statistics
-
+**Query Logs:**
 ```bash
-curl http://localhost:8081/api/v1/services/stats
+curl -X POST http://localhost:8081/api/v1/logs -H "Content-Type: application/json" -d '{
+  "service_name": "my-service",
+  "severity": "ERROR",
+  "start_time": "2024-01-01T00:00:00Z",
+  "end_time": "2024-01-01T23:59:59Z"
+}'
 ```
 
-## Performance Testing
-
-Run the included load test tool:
+## Load Testing
 
 ```bash
-cd benchmarks
-go build -o load_test load_test.go
+# Build load test
+go build -o bin/load_test ./benchmarks
 
-# Test at 100K spans/sec for 5 minutes
-./load_test -rate 100000 -duration 5m -workers 20
-
-# Monitor metrics
-curl http://localhost:9090/metrics | grep otel_
+# Run 100K spans/sec for 5 minutes
+./bin/load_test -rate 100000 -duration 5m -workers 20
 ```
 
-## Monitoring
+See [benchmarks/README.md](benchmarks/README.md) for more options.
 
-### Prometheus Metrics
+## Testing
 
-- **Collector:** `http://localhost:9090/metrics`
-- **Query Service:** `http://localhost:9091/metrics`
+```bash
+# Unit tests
+go test ./...
 
-Key metrics:
-- `otel_received_spans_total` - Total spans received
-- `otel_storage_writes_total` - Storage write operations
-- `otel_storage_write_duration_seconds` - Write latency
-- `otel_query_duration_seconds` - Query latency
+# Integration tests (requires ClickHouse)
+go test -tags=integration ./tests/integration/...
 
-### Grafana Dashboards
+# With coverage
+go test -cover ./...
+```
 
-Pre-built dashboards in `dashboards/`:
-- `otel-collector-dashboard.json` - Collector performance
-- `otel-query-dashboard.json` - Query API performance
-- `clickhouse-dashboard.json` - Storage statistics
+See [tests/README.md](tests/README.md) for detailed testing guide.
 
-Import into Grafana at http://localhost:3000
+## Configuration
+
+**ClickHouse Connection:**
+- Username: `default`
+- Password: *(empty)*
+- Database: `otel`
+
+**Key Config Files:**
+- `configs/collector.yaml` - Collector settings
+- `configs/query.yaml` - Query API settings
+- `deployments/docker/docker-compose.yaml` - Docker setup
+- `deployments/k8s/` - Kubernetes manifests
+
+**Environment Variables:**
+```bash
+CLICKHOUSE_HOST=clickhouse:9000
+CLICKHOUSE_DATABASE=otel
+CLICKHOUSE_USERNAME=default
+CLICKHOUSE_PASSWORD=
+LOG_LEVEL=info
+```
 
 ## Project Structure
 
 ```
 otelservices/
-├── cmd/
-│   ├── collector/      # OTLP Collector service
-│   ├── storage/        # (Integrated into collector)
-│   └── query/          # Query API service
-├── internal/
-│   ├── config/         # Configuration management
-│   ├── clickhouse/     # ClickHouse client
+├── cmd/                # Service entry points
+│   ├── collector/      # OTLP Collector
+│   └── query/          # Query API
+├── internal/           # Shared packages
+│   ├── clickhouse/     # Database client
+│   ├── config/         # Configuration
 │   ├── models/         # Data models
-│   └── monitoring/     # Prometheus metrics
-├── deployments/
-│   ├── docker/         # Docker Compose setup
-│   └── k8s/            # Kubernetes manifests
-├── schema/             # ClickHouse DDL scripts
-├── benchmarks/         # Performance testing tools
+│   └── monitoring/     # Metrics/health
+├── deployments/        # Deployment configs
+│   ├── docker/         # Docker Compose
+│   └── k8s/            # Kubernetes
+├── schema/             # Database schema
+├── benchmarks/         # Load testing
+├── tests/              # Integration tests
 ├── dashboards/         # Grafana dashboards
-├── docs/               # Documentation
-└── configs/            # Configuration files
+└── configs/            # YAML configs
 ```
 
-## Documentation
+## Performance
 
-- [Architecture](docs/ARCHITECTURE.md) - System design and components
-- [Deployment Guide](docs/DEPLOYMENT.md) - Installation and deployment
-- [Performance Tuning](docs/TUNING.md) - Optimization guidelines
+- **Ingestion:** 100K+ spans/sec
+- **Query Latency:** p95 < 500ms (24h queries)
+- **Compression:** ~10:1 ratio
+- **Retention:** 30d raw, 90d 5m rollups, 1y 1h rollups
+- **Memory:** <4GB per collector
+- **Storage:** <1TB per billion spans
 
-## Performance Targets
-
-- **Ingestion:** 100,000+ spans/sec per instance
-- **Query Latency:** p95 < 500ms for 24-hour queries
-- **Storage Efficiency:** <1TB for 1 billion spans
-- **Memory Usage:** <4GB per collector instance
-- **CPU Usage:** <50% utilization at 50K spans/sec
-
-## Configuration
-
-### Collector Configuration
-
-Edit `configs/collector.yaml`:
-
-```yaml
-clickhouse:
-  addresses: ["localhost:9000"]
-  database: "otel"
-
-otlp:
-  grpc_port: 4317
-  http_port: 4318
-
-performance:
-  batch_size: 10000
-  batch_timeout: 10s
-  worker_count: 4
-```
-
-### Query Service Configuration
-
-Edit `configs/query.yaml`:
-
-```yaml
-clickhouse:
-  addresses: ["localhost:9000"]
-  database: "otel"
-
-server:
-  port: 8081
-```
-
-## Environment Variables
-
-Override configuration with environment variables:
+## Kubernetes Deployment
 
 ```bash
-export CLICKHOUSE_HOST="clickhouse:9000"
-export CLICKHOUSE_DATABASE="otel"
-export CLICKHOUSE_USERNAME="default"
-export CLICKHOUSE_PASSWORD="secret"
-export LOG_LEVEL="debug"
-export OTLP_GRPC_PORT="4317"
+kubectl apply -f deployments/k8s/namespace.yaml
+kubectl create configmap clickhouse-schema --from-file=schema/ -n otel-system
+kubectl apply -f deployments/k8s/clickhouse-statefulset.yaml
+kubectl apply -f deployments/k8s/collector-deployment.yaml
+kubectl apply -f deployments/k8s/query-deployment.yaml
 ```
 
-## Development
+## Monitoring
 
-### Prerequisites
+**Prometheus Metrics:**
+- Collector: `http://localhost:9090/metrics`
+- Query API: `http://localhost:9091/metrics`
 
-- Go 1.21+
-- Docker and Docker Compose
-- ClickHouse 23.8+
+**Key Metrics:**
+- `otel_received_spans_total`
+- `otel_storage_writes_total`
+- `otel_storage_write_duration_seconds`
+- `otel_query_duration_seconds`
 
-### Building
+**Grafana Dashboards:**
+Import from `dashboards/` at http://localhost:3000
 
-```bash
-# Install dependencies
-go mod download
+## Built With
 
-# Build collector
-go build -o bin/collector ./cmd/collector
-
-# Build query service
-go build -o bin/query ./cmd/query
-
-# Build benchmarks
-go build -o bin/load_test ./benchmarks
-```
-
-### Testing
-
-```bash
-# Run unit tests
-go test ./...
-
-# Run integration tests (requires running ClickHouse)
-go test -tags=integration ./...
-```
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please read CONTRIBUTING.md for guidelines.
-
-## Support
-
-- **Documentation:** See `docs/` directory
-- **Issues:** GitHub Issues
-- **Discussions:** GitHub Discussions
-
-## Acknowledgments
-
-Built with:
 - [OpenTelemetry](https://opentelemetry.io/)
 - [ClickHouse](https://clickhouse.com/)
 - [Prometheus](https://prometheus.io/)
