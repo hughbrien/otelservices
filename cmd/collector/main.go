@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/protobuf/proto"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -314,6 +316,115 @@ func (c *Collector) processLogs(ctx context.Context) {
 	}
 }
 
+// HTTP handlers for OTLP over HTTP
+func (c *Collector) handleHTTPTraces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	req := &coltracepb.ExportTraceServiceRequest{}
+	if err := proto.Unmarshal(body, req); err != nil {
+		http.Error(w, "Failed to parse protobuf request", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := c.trace.Export(r.Context(), req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Export failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respBytes, err := proto.Marshal(resp)
+	if err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+	w.Write(respBytes)
+}
+
+func (c *Collector) handleHTTPMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	req := &colmetricspb.ExportMetricsServiceRequest{}
+	if err := proto.Unmarshal(body, req); err != nil {
+		http.Error(w, "Failed to parse protobuf request", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := c.metrics.Export(r.Context(), req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Export failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respBytes, err := proto.Marshal(resp)
+	if err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+	w.Write(respBytes)
+}
+
+func (c *Collector) handleHTTPLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	req := &collogspb.ExportLogsServiceRequest{}
+	if err := proto.Unmarshal(body, req); err != nil {
+		http.Error(w, "Failed to parse protobuf request", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := c.logs.Export(r.Context(), req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Export failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respBytes, err := proto.Marshal(resp)
+	if err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+	w.Write(respBytes)
+}
+
 func main() {
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
@@ -371,8 +482,32 @@ func main() {
 		}
 	}()
 
+	// Start OTLP HTTP server if enabled
+	log.Printf("HTTP endpoint enabled: %v, port: %d", cfg.OTLP.EnableHTTP, cfg.OTLP.HTTPPort)
+	var httpServer *http.Server
+	if cfg.OTLP.EnableHTTP {
+		httpMux := http.NewServeMux()
+		httpMux.HandleFunc("/v1/traces", collector.handleHTTPTraces)
+		httpMux.HandleFunc("/v1/metrics", collector.handleHTTPMetrics)
+		httpMux.HandleFunc("/v1/logs", collector.handleHTTPLogs)
+
+		httpServer = &http.Server{
+			Addr:         fmt.Sprintf(":%d", cfg.OTLP.HTTPPort),
+			Handler:      httpMux,
+			ReadTimeout:  cfg.Server.ReadTimeout,
+			WriteTimeout: cfg.Server.WriteTimeout,
+		}
+
+		go func() {
+			log.Printf("OTLP HTTP server started on port %d", cfg.OTLP.HTTPPort)
+			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("HTTP server error: %v", err)
+			}
+		}()
+	}
+
 	collector.healthCheck.SetReady(true)
-	log.Printf("OTLP Collector started on port %d", cfg.OTLP.GRPCPort)
+	log.Printf("OTLP Collector started on port %d (gRPC)", cfg.OTLP.GRPCPort)
 
 	go func() {
 		if err := grpcServer.Serve(lis); err != nil {
@@ -387,6 +522,16 @@ func main() {
 	log.Println("Shutting down gracefully...")
 	collector.healthCheck.SetReady(false)
 	cancel()
+
+	// Shutdown HTTP server if running
+	if httpServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+		defer shutdownCancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
+	}
+
 	grpcServer.GracefulStop()
 	collector.wg.Wait()
 	log.Println("Shutdown complete")
